@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase.js';
 import matter from 'gray-matter';
+import slugify from 'slugify';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -35,8 +36,8 @@ async function fetchRawContent(owner, repo, branch, filePath) {
   const res = await fetch(apiUrl, {
     headers: {
       Authorization: `token ${process.env.GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github.v3.raw'
-    }
+      Accept: 'application/vnd.github.v3.raw',
+    },
   });
 
   if (!res.ok) {
@@ -44,6 +45,15 @@ async function fetchRawContent(owner, repo, branch, filePath) {
   }
 
   return await res.text();
+}
+
+function generateSlug(title, filePath) {
+  if (title) {
+    return slugify(title, { lower: true, strict: true });
+  }
+  // fallback slug based on filename without extension
+  const fileName = filePath.split('/').pop().replace(/\.md$/, '');
+  return slugify(fileName, { lower: true, strict: true });
 }
 
 export default async function handler(req, res) {
@@ -56,25 +66,26 @@ export default async function handler(req, res) {
     const mdFiles = await listMdFiles(owner, repo);
 
     // Build the current GitHub content URLs
-    const currentGitHubUrls = mdFiles.map(filePath =>
-      `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`
+    const currentGitHubUrls = mdFiles.map(
+      (filePath) => `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`
     );
 
-    // Step 2: Get all content_url entries from Supabase
+    // Step 2: Get all slugs from Supabase (assuming slug is unique)
     const { data: existingRecords, error: fetchError } = await supabase
       .from('blogs')
-      .select('content_url');
+      .select('slug, content_url');
 
     if (fetchError) {
       console.error('Failed to fetch existing blog entries:', fetchError);
       return res.status(500).send('Supabase fetch error');
     }
 
-    const existingUrls = existingRecords.map(record => record.content_url);
+    // Extract existing slugs and URLs for cleanup
+    const existingSlugs = existingRecords.map((record) => record.slug);
+    const existingUrls = existingRecords.map((record) => record.content_url);
 
     // Step 3: Delete missing files from Supabase
-    const toDelete = existingUrls.filter(url => !currentGitHubUrls.includes(url));
-
+    const toDelete = existingUrls.filter((url) => !currentGitHubUrls.includes(url));
     if (toDelete.length > 0) {
       const { error: deleteError } = await supabase
         .from('blogs')
@@ -85,7 +96,6 @@ export default async function handler(req, res) {
         console.error('Error deleting old records:', deleteError);
         return res.status(500).send('Supabase delete error');
       }
-
       console.log(`Deleted ${toDelete.length} stale blog records.`);
     }
 
@@ -94,6 +104,9 @@ export default async function handler(req, res) {
       const content_url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
       const rawContent = await fetchRawContent(owner, repo, branch, filePath);
       const { data: frontmatter } = matter(rawContent);
+
+      // Generate slug
+      const slug = generateSlug(frontmatter.title, filePath);
 
       const upsertData = {
         content_url,
@@ -104,13 +117,23 @@ export default async function handler(req, res) {
         tags: frontmatter.tags ?? [],
         image: frontmatter.image ?? null,
         author: frontmatter.author ?? null,
+        slug,
       };
 
       const { error: upsertError } = await supabase
         .from('blogs')
         .upsert(upsertData, {
-          onConflict: ['content_url'],
-          updateColumns: ['updated_at', 'title', 'description', 'date', 'tags', 'image', 'author'],
+          onConflict: ['slug'],
+          updateColumns: [
+            'updated_at',
+            'title',
+            'description',
+            'date',
+            'tags',
+            'image',
+            'author',
+            'content_url',
+          ],
         });
 
       if (upsertError) {
@@ -119,7 +142,9 @@ export default async function handler(req, res) {
       }
     }
 
-    res.status(200).send(`Synced ${mdFiles.length} files. Deleted ${toDelete.length} removed entries.`);
+    res
+      .status(200)
+      .send(`Synced ${mdFiles.length} files. Deleted ${toDelete.length} removed entries.`);
   } catch (err) {
     console.error('Error during sync:', err);
     res.status(500).send('Server error');
