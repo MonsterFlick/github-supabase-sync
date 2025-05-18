@@ -3,11 +3,15 @@ import matter from 'gray-matter';
 
 const GITHUB_API = 'https://api.github.com';
 
+// Recursively lists all markdown files in a repo
 async function listMdFiles(owner, repo, path = '') {
   const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`;
   console.log(`Fetching file list from: ${url}`);
+
   const res = await fetch(url, {
-    headers: { Authorization: `token ${process.env.GITHUB_TOKEN}` }
+    headers: {
+      Authorization: `token ${process.env.GITHUB_TOKEN}`,
+    },
   });
 
   if (!res.ok) {
@@ -24,23 +28,23 @@ async function listMdFiles(owner, repo, path = '') {
       mdFiles.push(file.path);
     } else if (file.type === 'dir') {
       console.log(`Entering directory: ${file.path}`);
-      const nestedFiles = await listMdFiles(owner, repo, file.path);
-      mdFiles = mdFiles.concat(nestedFiles);
+      const nested = await listMdFiles(owner, repo, file.path);
+      mdFiles = mdFiles.concat(nested);
     }
   }
 
   return mdFiles;
 }
 
+// Fetches the raw content of a file via GitHub API (not raw.githubusercontent.com)
 async function fetchRawContent(owner, repo, branch, filePath) {
-  const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
-  console.log(`Fetching raw content from: ${rawUrl}`);
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+  console.log(`Fetching raw content via API: ${apiUrl}`);
 
-  const res = await fetch(rawUrl, {
+  const res = await fetch(apiUrl, {
     headers: {
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-      Authorization: `token ${process.env.GITHUB_TOKEN}`
+      Authorization: `token ${process.env.GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github.v3.raw'
     }
   });
 
@@ -49,9 +53,7 @@ async function fetchRawContent(owner, repo, branch, filePath) {
     throw new Error('Failed to fetch raw content: ' + res.status);
   }
 
-  const text = await res.text();
-  console.log(`Raw content for ${filePath}:\n${text}`);
-  return text;
+  return await res.text();
 }
 
 export default async function handler(req, res) {
@@ -70,7 +72,6 @@ export default async function handler(req, res) {
       const content_url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
       const rawContent = await fetchRawContent(owner, repo, branch, filePath);
 
-      // Parse frontmatter using gray-matter
       const { data: frontmatter } = matter(rawContent);
       console.log(`Parsed frontmatter for ${filePath}:`, frontmatter);
 
@@ -97,15 +98,15 @@ export default async function handler(req, res) {
       if (error) {
         console.error(`Supabase upsert error on file ${filePath}:`, error);
         return res.status(500).send('Database error');
-      } else {
-        console.log(`Upsert successful for file: ${filePath}`);
       }
+
+      console.log(`Upsert successful for file: ${filePath}`);
     }
 
     console.log('Sync complete.');
     res.status(200).send(`Synced ${mdFiles.length} markdown files with metadata.`);
-  } catch (error) {
-    console.error('Error in handler:', error);
+  } catch (err) {
+    console.error('Error in handler:', err);
     res.status(500).send('Server error');
   }
 }
