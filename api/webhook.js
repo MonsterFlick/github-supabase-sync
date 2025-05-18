@@ -3,11 +3,8 @@ import matter from 'gray-matter';
 
 const GITHUB_API = 'https://api.github.com';
 
-// Recursively lists all markdown files in a repo
 async function listMdFiles(owner, repo, path = '') {
   const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`;
-  console.log(`Fetching file list from: ${url}`);
-
   const res = await fetch(url, {
     headers: {
       Authorization: `token ${process.env.GITHUB_TOKEN}`,
@@ -15,7 +12,6 @@ async function listMdFiles(owner, repo, path = '') {
   });
 
   if (!res.ok) {
-    console.error(`Failed to fetch contents at path "${path}", status: ${res.status}`);
     throw new Error('Failed to fetch contents: ' + res.status);
   }
 
@@ -24,10 +20,8 @@ async function listMdFiles(owner, repo, path = '') {
 
   for (const file of files) {
     if (file.type === 'file' && file.name.endsWith('.md')) {
-      console.log(`Found markdown file: ${file.path}`);
       mdFiles.push(file.path);
     } else if (file.type === 'dir') {
-      console.log(`Entering directory: ${file.path}`);
       const nested = await listMdFiles(owner, repo, file.path);
       mdFiles = mdFiles.concat(nested);
     }
@@ -36,11 +30,8 @@ async function listMdFiles(owner, repo, path = '') {
   return mdFiles;
 }
 
-// Fetches the raw content of a file via GitHub API (not raw.githubusercontent.com)
 async function fetchRawContent(owner, repo, branch, filePath) {
   const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
-  console.log(`Fetching raw content via API: ${apiUrl}`);
-
   const res = await fetch(apiUrl, {
     headers: {
       Authorization: `token ${process.env.GITHUB_TOKEN}`,
@@ -49,7 +40,6 @@ async function fetchRawContent(owner, repo, branch, filePath) {
   });
 
   if (!res.ok) {
-    console.error(`Failed to fetch raw content for ${filePath}, status: ${res.status}`);
     throw new Error('Failed to fetch raw content: ' + res.status);
   }
 
@@ -62,18 +52,48 @@ export default async function handler(req, res) {
     const repo = 'GitFool-Blogs';
     const branch = 'main';
 
-    console.log('Starting sync of markdown files...');
+    // Step 1: Get all markdown files from GitHub
     const mdFiles = await listMdFiles(owner, repo);
-    console.log(`Total markdown files found: ${mdFiles.length}`);
 
+    // Build the current GitHub content URLs
+    const currentGitHubUrls = mdFiles.map(filePath =>
+      `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`
+    );
+
+    // Step 2: Get all content_url entries from Supabase
+    const { data: existingRecords, error: fetchError } = await supabase
+      .from('blogs')
+      .select('content_url');
+
+    if (fetchError) {
+      console.error('Failed to fetch existing blog entries:', fetchError);
+      return res.status(500).send('Supabase fetch error');
+    }
+
+    const existingUrls = existingRecords.map(record => record.content_url);
+
+    // Step 3: Delete missing files from Supabase
+    const toDelete = existingUrls.filter(url => !currentGitHubUrls.includes(url));
+
+    if (toDelete.length > 0) {
+      const { error: deleteError } = await supabase
+        .from('blogs')
+        .delete()
+        .in('content_url', toDelete);
+
+      if (deleteError) {
+        console.error('Error deleting old records:', deleteError);
+        return res.status(500).send('Supabase delete error');
+      }
+
+      console.log(`Deleted ${toDelete.length} stale blog records.`);
+    }
+
+    // Step 4: Insert/update current GitHub files
     for (const filePath of mdFiles) {
-      console.log(`Processing file: ${filePath}`);
-
       const content_url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
       const rawContent = await fetchRawContent(owner, repo, branch, filePath);
-
       const { data: frontmatter } = matter(rawContent);
-      console.log(`Parsed frontmatter for ${filePath}:`, frontmatter);
 
       const upsertData = {
         content_url,
@@ -86,27 +106,22 @@ export default async function handler(req, res) {
         author: frontmatter.author ?? null,
       };
 
-      console.log('Upserting with tags:', upsertData.tags);
-
-      const { error } = await supabase
+      const { error: upsertError } = await supabase
         .from('blogs')
         .upsert(upsertData, {
           onConflict: ['content_url'],
           updateColumns: ['updated_at', 'title', 'description', 'date', 'tags', 'image', 'author'],
         });
 
-      if (error) {
-        console.error(`Supabase upsert error on file ${filePath}:`, error);
-        return res.status(500).send('Database error');
+      if (upsertError) {
+        console.error(`Error upserting ${filePath}:`, upsertError);
+        return res.status(500).send('Supabase upsert error');
       }
-
-      console.log(`Upsert successful for file: ${filePath}`);
     }
 
-    console.log('Sync complete.');
-    res.status(200).send(`Synced ${mdFiles.length} markdown files with metadata.`);
+    res.status(200).send(`Synced ${mdFiles.length} files. Deleted ${toDelete.length} removed entries.`);
   } catch (err) {
-    console.error('Error in handler:', err);
+    console.error('Error during sync:', err);
     res.status(500).send('Server error');
   }
 }
