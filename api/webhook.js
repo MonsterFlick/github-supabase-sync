@@ -9,12 +9,13 @@ async function listMdFiles(owner, repo, path = '') {
   const res = await fetch(url, {
     headers: { Authorization: `token ${process.env.GITHUB_TOKEN}` }
   });
+
   if (!res.ok) {
     console.error(`Failed to fetch contents at path "${path}", status: ${res.status}`);
     throw new Error('Failed to fetch contents: ' + res.status);
   }
-  const files = await res.json();
 
+  const files = await res.json();
   let mdFiles = [];
 
   for (const file of files) {
@@ -34,12 +35,23 @@ async function listMdFiles(owner, repo, path = '') {
 async function fetchRawContent(owner, repo, branch, filePath) {
   const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
   console.log(`Fetching raw content from: ${rawUrl}`);
-  const res = await fetch(rawUrl);
+
+  const res = await fetch(rawUrl, {
+    headers: {
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      Authorization: `token ${process.env.GITHUB_TOKEN}`
+    }
+  });
+
   if (!res.ok) {
     console.error(`Failed to fetch raw content for ${filePath}, status: ${res.status}`);
     throw new Error('Failed to fetch raw content: ' + res.status);
   }
-  return await res.text();
+
+  const text = await res.text();
+  console.log(`Raw content for ${filePath}:\n${text}`);
+  return text;
 }
 
 export default async function handler(req, res) {
@@ -72,15 +84,15 @@ export default async function handler(req, res) {
         image: frontmatter.image ?? null,
         author: frontmatter.author ?? null,
       };
-      
+
+      console.log('Upserting with tags:', upsertData.tags);
+
       const { error } = await supabase
         .from('blogs')
-        .upsert(upsertData, { 
+        .upsert(upsertData, {
           onConflict: ['content_url'],
           updateColumns: ['updated_at', 'title', 'description', 'date', 'tags', 'image', 'author'],
         });
-      console.log('Upserting with tags:', upsertData.tags);
-
 
       if (error) {
         console.error(`Supabase upsert error on file ${filePath}:`, error);
