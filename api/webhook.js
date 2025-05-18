@@ -70,7 +70,7 @@ export default async function handler(req, res) {
         date: frontmatter.date ?? null,
         tags: frontmatter.tags ?? [],
         image: frontmatter.image ?? null,
-        author: frontmatter.author ? JSON.stringify(frontmatter.author) : null,
+        author: frontmatter.author ?? null,
       };
       
       const { error } = await supabase
@@ -79,6 +79,7 @@ export default async function handler(req, res) {
           onConflict: ['content_url'],
           updateColumns: ['updated_at', 'title', 'description', 'date', 'tags', 'image', 'author'],
         });
+      console.log('Upserting with tags:', upsertData.tags);
 
 
       if (error) {
