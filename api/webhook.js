@@ -70,7 +70,7 @@ export default async function handler(req, res) {
         date: frontmatter.date ?? null,
         tags: frontmatter.tags ?? [],
         image: frontmatter.image ?? null,
-        author: frontmatter.author ? JSON.stringify(frontmatter.author) : null
+        author: frontmatter.author ? JSON.stringify(frontmatter.author) : null,
       };
       
       const { error } = await supabase
