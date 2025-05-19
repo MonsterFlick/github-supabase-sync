@@ -112,7 +112,7 @@ export default async function handler(req, res) {
       const { error: upsertError } = await supabase
         .from('blogs')
         .upsert(upsertData, {
-          onConflict: ['slug'],
+          onConflict: ['content_url'],
           updateColumns: [
             'updated_at',
             'title',
