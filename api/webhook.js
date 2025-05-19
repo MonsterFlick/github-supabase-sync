@@ -51,7 +51,6 @@ function generateSlug(title, filePath) {
   if (title) {
     return slugify(title, { lower: true, strict: true });
   }
-  // fallback slug based on filename without extension
   const fileName = filePath.split('/').pop().replace(/\.md$/, '');
   return slugify(fileName, { lower: true, strict: true });
 }
@@ -62,15 +61,11 @@ export default async function handler(req, res) {
     const repo = 'GitFool-Blogs';
     const branch = 'main';
 
-    // Step 1: Get all markdown files from GitHub
     const mdFiles = await listMdFiles(owner, repo);
-
-    // Build the current GitHub content URLs
     const currentGitHubUrls = mdFiles.map(
       (filePath) => `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`
     );
 
-    // Step 2: Get all slugs from Supabase (assuming slug is unique)
     const { data: existingRecords, error: fetchError } = await supabase
       .from('blogs')
       .select('slug, content_url');
@@ -80,11 +75,8 @@ export default async function handler(req, res) {
       return res.status(500).send('Supabase fetch error');
     }
 
-    // Extract existing slugs and URLs for cleanup
-    const existingSlugs = existingRecords.map((record) => record.slug);
     const existingUrls = existingRecords.map((record) => record.content_url);
 
-    // Step 3: Delete missing files from Supabase
     const toDelete = existingUrls.filter((url) => !currentGitHubUrls.includes(url));
     if (toDelete.length > 0) {
       const { error: deleteError } = await supabase
@@ -99,13 +91,10 @@ export default async function handler(req, res) {
       console.log(`Deleted ${toDelete.length} stale blog records.`);
     }
 
-    // Step 4: Insert/update current GitHub files
     for (const filePath of mdFiles) {
       const content_url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
       const rawContent = await fetchRawContent(owner, repo, branch, filePath);
       const { data: frontmatter } = matter(rawContent);
-
-      // Generate slug
       const slug = generateSlug(frontmatter.title, filePath);
 
       const upsertData = {
@@ -142,9 +131,7 @@ export default async function handler(req, res) {
       }
     }
 
-    res
-      .status(200)
-      .send(`Synced ${mdFiles.length} files. Deleted ${toDelete.length} removed entries.`);
+    res.status(200).send(`Synced ${mdFiles.length} files. Deleted ${toDelete.length} removed entries.`);
   } catch (err) {
     console.error('Error during sync:', err);
     res.status(500).send('Server error');
